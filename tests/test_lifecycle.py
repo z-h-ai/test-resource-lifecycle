@@ -21,6 +21,8 @@ class LifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw, patch("trl.core.process_birth", return_value="birth"):
             root = Path(raw)
             lifecycle = Lifecycle(self.config(), "test", root, "run-1", root / "state")
+            self.assertEqual(lifecycle.environment["TRL_RUN_ID"], "run-1")
+            self.assertEqual(lifecycle.environment["TRL_RUN_CONTEXT"], str(lifecycle.paths.global_dir / "run-context.json"))
             lifecycle.prepare()
             code, report = lifecycle.cleanup(23, None)
             self.assertEqual(code, 23)

@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-VERSION = "1.0.0-rc.2"
+VERSION = "1.0.0-rc.3"
 DIST.mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory() as raw:
     source = Path(raw)

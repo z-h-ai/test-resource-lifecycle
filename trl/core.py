@@ -327,6 +327,15 @@ class Lifecycle:
         self.ledger: dict[str, Any] = {"context": self.context, "resources": [], "updated_at": utc_now()}
         self.environment = os.environ.copy()
         self.environment.update(self.profile.get("environment", {}))
+        self.environment.update({
+            "TRL_RUN_ID": self.run_id,
+            "TRL_EXECUTION_NONCE": self.nonce,
+            "TRL_HOST_ID": self.host_id,
+            "TRL_DOCKER_CONTEXT": self.docker_context,
+            "TRL_RUN_CONTEXT": str(self.paths.global_dir / "run-context.json"),
+            "TRL_RESOURCE_LEDGER": str(self.paths.global_dir / "resource-ledger.json"),
+            "TRL_CLEANUP_REPORT": str(self.paths.global_dir / "cleanup-report.json"),
+        })
         self.secrets: list[str] = []
 
     def _needs_docker(self) -> bool:
@@ -397,6 +406,7 @@ class Lifecycle:
         if not password:
             password = secrets.token_urlsafe(24)
         self.secrets.append(password)
+        self.environment[entry["password_env"]] = password
         safe_name = re.sub(r"[^a-z0-9_.-]", "-", f"trl-{self.config['repository_id']}-{self.run_id}-{entry['name']}").lower()[:63]
         volume_name = f"{safe_name}-data"[:63]
         volume_id = self.runner(

@@ -58,21 +58,29 @@ def run_command(args: argparse.Namespace) -> int:
         lifecycle.recover_repo()
         lifecycle.prepare()
         child = subprocess.Popen(args.command, cwd=command_cwd, env=lifecycle.environment, start_new_session=True)
-        lifecycle.add_resource(
-            "process", str(child.pid), "test-command",
-            {"adapter": "test-command", "process_birth": process_birth(child.pid)},
-        )
         try:
-            original_exit = child.wait(timeout=lifecycle.profile.get("timeout_seconds"))
-        except subprocess.TimeoutExpired:
-            received_signal = signal.SIGTERM
-            os.killpg(child.pid, signal.SIGTERM)
+            child_birth = process_birth(child.pid)
+        except RuntimeError:
+            if child.poll() is None:
+                raise
+            original_exit = child.returncode
+        else:
+            lifecycle.add_resource(
+                "process", str(child.pid), "test-command",
+                {"adapter": "test-command", "process_birth": child_birth},
+            )
+        if original_exit is None:
             try:
-                original_exit = child.wait(timeout=5)
+                original_exit = child.wait(timeout=lifecycle.profile.get("timeout_seconds"))
             except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait()
-            original_exit = None
+                received_signal = signal.SIGTERM
+                os.killpg(child.pid, signal.SIGTERM)
+                try:
+                    original_exit = child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait()
+                original_exit = None
     except Exception as exc:
         prepare_error = redact(exc, lifecycle.secrets if lifecycle else ())
     finally:

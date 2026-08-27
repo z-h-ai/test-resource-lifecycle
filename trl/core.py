@@ -107,7 +107,10 @@ def process_birth(pid: int) -> str:
         ["ps", "-o", "lstart=", "-p", str(pid)], text=True,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
     )
-    return sha256_bytes(result.stdout.strip().encode())
+    birth = result.stdout.strip()
+    if result.returncode != 0 or not birth:
+        raise RuntimeError("process identity is unavailable")
+    return sha256_bytes(birth.encode())
 
 
 def owner_alive(owner: dict[str, Any], current_host: str) -> bool:
@@ -120,7 +123,10 @@ def owner_alive(owner: dict[str, Any], current_host: str) -> bool:
         return False
     except PermissionError:
         return True
-    return process_birth(pid) == owner.get("process_birth")
+    try:
+        return process_birth(pid) == owner.get("process_birth")
+    except RuntimeError:
+        return False
 
 
 class CommandError(RuntimeError):
@@ -597,7 +603,12 @@ def cleanup_ledger_resource(
             except ProcessLookupError:
                 result.update(result="already_absent", attempts=1)
                 return result
-            if process_birth(pid) != item.get("process_birth"):
+            try:
+                current_birth = process_birth(pid)
+            except RuntimeError:
+                result.update(result="already_absent", attempts=1)
+                return result
+            if current_birth != item.get("process_birth"):
                 result.update(result="preserved_identity_mismatch", attempts=1)
                 return result
             os.killpg(pid, signal.SIGTERM)

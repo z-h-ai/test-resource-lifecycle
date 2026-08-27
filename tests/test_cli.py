@@ -41,6 +41,12 @@ class CliIntegrationTests(unittest.TestCase):
             result = self.run_cli(Path(raw), "print('ok')")
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_immediate_child_exit_is_not_a_process_claim_failure(self):
+        for _ in range(20):
+            with tempfile.TemporaryDirectory() as raw:
+                result = self.run_cli(Path(raw), "pass")
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_explicit_workdir_places_audit_with_consumer(self):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)

@@ -26,7 +26,7 @@ def _print(value: Any, json_output: bool = True) -> None:
 
 def run_command(args: argparse.Namespace) -> int:
     config_path = Path(args.config).resolve()
-    workdir = config_path.parent
+    workdir = Path(args.workdir).resolve() if args.workdir else config_path.parent
     config = read_json(config_path)
     lifecycle: Lifecycle | None = None
     child: subprocess.Popen[Any] | None = None
@@ -170,6 +170,7 @@ def parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run")
     run.add_argument("--config", default=".test-resource-lifecycle.json")
     run.add_argument("--profile", required=True)
+    run.add_argument("--workdir", help="repository worktree; defaults to the config directory")
     run.add_argument("--run-id")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(handler=run_command)

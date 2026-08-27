@@ -40,6 +40,25 @@ class CliIntegrationTests(unittest.TestCase):
             result = self.run_cli(Path(raw), "print('ok')")
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_explicit_workdir_places_audit_with_consumer(self):
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            config_dir, consumer = base / "config", base / "consumer"
+            config_dir.mkdir()
+            consumer.mkdir()
+            config = {"policy_version": 1, "repository_id": "consumer", "profiles": {"compat": {"resources": {}}}}
+            config_path = config_dir / "trl.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            env = os.environ.copy()
+            env["XDG_STATE_HOME"] = str(base / "state")
+            result = subprocess.run(
+                [sys.executable, "-m", "trl", "run", "--config", str(config_path), "--profile", "compat", "--workdir", str(consumer), "--run-id", "workdir", "--", sys.executable, "-c", "pass"],
+                cwd=Path(__file__).resolve().parents[1], env=env, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(any((consumer / ".pipeline/test-resource-runs").glob("*/*/cleanup-report.json")))
+
 
 if __name__ == "__main__":
     unittest.main()

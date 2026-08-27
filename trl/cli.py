@@ -13,7 +13,7 @@ from typing import Any
 from . import __version__
 from .core import (
     EXIT_INFRASTRUCTURE, Lifecycle, cache_home, docker_context_hash, iter_ledgers,
-    read_json, redact, stable_host_id, state_home, sweep_ledgers, validate_config,
+    process_birth, read_json, redact, stable_host_id, state_home, sweep_ledgers, validate_config,
 )
 
 
@@ -58,6 +58,10 @@ def run_command(args: argparse.Namespace) -> int:
         lifecycle.recover_repo()
         lifecycle.prepare()
         child = subprocess.Popen(args.command, cwd=command_cwd, env=lifecycle.environment, start_new_session=True)
+        lifecycle.add_resource(
+            "process", str(child.pid), "test-command",
+            {"adapter": "test-command", "process_birth": process_birth(child.pid)},
+        )
         try:
             original_exit = child.wait(timeout=lifecycle.profile.get("timeout_seconds"))
         except subprocess.TimeoutExpired:

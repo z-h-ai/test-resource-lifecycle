@@ -1,0 +1,45 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+class CliIntegrationTests(unittest.TestCase):
+    def run_cli(self, root: Path, child_code: str):
+        config = {
+            "policy_version": 1,
+            "repository_id": "cli-test",
+            "profiles": {"unit": {"resources": {"filesystem": [{"name": "tmp", "path": ".tmp/${TRL_RUN_ID}"}]}}},
+        }
+        config_path = root / ".test-resource-lifecycle.json"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        env = os.environ.copy()
+        env["XDG_STATE_HOME"] = str(root / "state")
+        return subprocess.run(
+            [sys.executable, "-m", "trl", "run", "--config", str(config_path), "--profile", "unit", "--run-id", "integration", "--", sys.executable, "-c", child_code],
+            cwd=Path(__file__).resolve().parents[1], env=env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+
+    def test_child_exit_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            result = self.run_cli(root, "raise SystemExit(19)")
+            self.assertEqual(result.returncode, 19, result.stderr)
+            report = next((root / ".pipeline/test-resource-runs").glob("*/*/cleanup-report.json"))
+            self.assertEqual(json.loads(report.read_text())["checks"]["exit_code"], 19)
+            self.assertFalse((root / ".tmp/integration").exists())
+
+    def test_success(self):
+        with tempfile.TemporaryDirectory() as raw:
+            result = self.run_cli(Path(raw), "print('ok')")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

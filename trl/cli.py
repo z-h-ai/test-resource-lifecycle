@@ -27,6 +27,13 @@ def _print(value: Any, json_output: bool = True) -> None:
 def run_command(args: argparse.Namespace) -> int:
     config_path = Path(args.config).resolve()
     workdir = Path(args.workdir).resolve() if args.workdir else config_path.parent
+    command_cwd = Path(args.command_cwd).resolve() if args.command_cwd else workdir
+    try:
+        command_cwd.relative_to(workdir)
+    except ValueError:
+        raise ValueError("command cwd must stay inside the repository workdir")
+    if not command_cwd.is_dir():
+        raise ValueError("command cwd must be an existing directory")
     config = read_json(config_path)
     lifecycle: Lifecycle | None = None
     child: subprocess.Popen[Any] | None = None
@@ -50,7 +57,7 @@ def run_command(args: argparse.Namespace) -> int:
         lifecycle = Lifecycle(config, args.profile, workdir, args.run_id)
         lifecycle.recover_repo()
         lifecycle.prepare()
-        child = subprocess.Popen(args.command, cwd=workdir, env=lifecycle.environment, start_new_session=True)
+        child = subprocess.Popen(args.command, cwd=command_cwd, env=lifecycle.environment, start_new_session=True)
         try:
             original_exit = child.wait(timeout=lifecycle.profile.get("timeout_seconds"))
         except subprocess.TimeoutExpired:
@@ -171,6 +178,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--config", default=".test-resource-lifecycle.json")
     run.add_argument("--profile", required=True)
     run.add_argument("--workdir", help="repository worktree; defaults to the config directory")
+    run.add_argument("--command-cwd", help="child command directory inside the repository worktree")
     run.add_argument("--run-id")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(handler=run_command)

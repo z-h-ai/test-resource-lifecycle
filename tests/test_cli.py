@@ -59,6 +59,22 @@ class CliIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(any((consumer / ".pipeline/test-resource-runs").glob("*/*/cleanup-report.json")))
 
+    def test_command_cwd_is_independent_from_audit_workdir(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            child_dir = root / "packages/web"
+            child_dir.mkdir(parents=True)
+            config = {"policy_version": 1, "repository_id": "monorepo", "profiles": {"test": {"resources": {}}}}
+            config_path = root / ".test-resource-lifecycle.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            env = os.environ.copy(); env["XDG_STATE_HOME"] = str(root / "state")
+            result = subprocess.run(
+                [sys.executable, "-m", "trl", "run", "--config", str(config_path), "--profile", "test", "--command-cwd", str(child_dir), "--", sys.executable, "-c", "import os; assert os.getcwd().endswith('packages/web')"],
+                cwd=Path(__file__).resolve().parents[1], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(any((root / ".pipeline/test-resource-runs").glob("*/*/cleanup-report.json")))
+
 
 if __name__ == "__main__":
     unittest.main()

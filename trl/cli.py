@@ -17,6 +17,19 @@ from .core import (
 )
 
 
+COMMAND_GATE = """\
+import os, sys, time
+owner_pid = int(sys.argv[1])
+gate = sys.argv[2]
+deadline = time.monotonic() + 10
+while not os.path.exists(gate):
+    if os.getppid() != owner_pid or time.monotonic() >= deadline:
+        raise SystemExit(70)
+    time.sleep(0.01)
+os.execvpe(sys.argv[3], sys.argv[3:], os.environ)
+"""
+
+
 def _print(value: Any, json_output: bool = True) -> None:
     if json_output:
         print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
@@ -57,7 +70,11 @@ def run_command(args: argparse.Namespace) -> int:
         lifecycle = Lifecycle(config, args.profile, workdir, args.run_id)
         lifecycle.recover_repo()
         lifecycle.prepare()
-        child = subprocess.Popen(args.command, cwd=command_cwd, env=lifecycle.environment, start_new_session=True)
+        gate = lifecycle.paths.global_dir / ".command-claim-ready"
+        child = subprocess.Popen(
+            [sys.executable, "-c", COMMAND_GATE, str(os.getpid()), str(gate), *args.command],
+            cwd=command_cwd, env=lifecycle.environment, start_new_session=True,
+        )
         try:
             child_birth = process_birth(child.pid)
         except RuntimeError:
@@ -69,6 +86,7 @@ def run_command(args: argparse.Namespace) -> int:
                 "process", str(child.pid), "test-command",
                 {"adapter": "test-command", "process_birth": child_birth},
             )
+            gate.touch(mode=0o600, exist_ok=False)
         if original_exit is None:
             try:
                 original_exit = child.wait(timeout=lifecycle.profile.get("timeout_seconds"))

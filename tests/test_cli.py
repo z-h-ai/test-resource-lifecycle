@@ -47,6 +47,15 @@ class CliIntegrationTests(unittest.TestCase):
                 result = self.run_cli(Path(raw), "pass")
                 self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_child_starts_only_after_its_process_claim_is_durable(self):
+        with tempfile.TemporaryDirectory() as raw:
+            result = self.run_cli(
+                Path(raw),
+                "import json,os; ledger=json.load(open(os.environ['TRL_RESOURCE_LEDGER'])); "
+                "assert any(item.get('adapter') == 'test-command' and item.get('state') == 'created' for item in ledger['resources'])",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_explicit_workdir_places_audit_with_consumer(self):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)

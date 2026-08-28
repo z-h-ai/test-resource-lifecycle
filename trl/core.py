@@ -24,6 +24,7 @@ EXIT_INFRASTRUCTURE = 70
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 DB_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 LABEL_PREFIX = "com.z-h-ai.test"
+PROCESS_BIRTH_VERSION = "v2"
 LABEL_KEYS = (
     "managed", "policy-version", "repository-id", "run-id",
     "execution-nonce", "host-id", "docker-context",
@@ -102,15 +103,24 @@ def process_birth(pid: int) -> str:
         if stat.exists():
             fields = stat.read_text(encoding="utf-8").split()
             if len(fields) > 21:
-                return sha256_bytes(fields[21].encode())
+                return f"{PROCESS_BIRTH_VERSION}:{sha256_bytes(fields[21].encode())}"
+    identity_env = os.environ.copy()
+    identity_env.update({"LC_ALL": "C", "LANG": "C", "TZ": "UTC"})
     result = subprocess.run(
         ["ps", "-o", "lstart=", "-p", str(pid)], text=True,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
+        env=identity_env,
     )
     birth = result.stdout.strip()
     if result.returncode != 0 or not birth:
         raise RuntimeError("process identity is unavailable")
-    return sha256_bytes(birth.encode())
+    return f"{PROCESS_BIRTH_VERSION}:{sha256_bytes(birth.encode())}"
+
+
+def is_current_process_birth(value: Any) -> bool:
+    return isinstance(value, str) and bool(
+        re.fullmatch(rf"{PROCESS_BIRTH_VERSION}:[a-f0-9]{{64}}", value)
+    )
 
 
 def owner_alive(owner: dict[str, Any], current_host: str) -> bool:
@@ -123,10 +133,15 @@ def owner_alive(owner: dict[str, Any], current_host: str) -> bool:
         return False
     except PermissionError:
         return True
+    recorded_birth = owner.get("process_birth")
+    if not is_current_process_birth(recorded_birth):
+        # v1 hashes inherited the caller's locale and timezone. A live PID with
+        # such a token cannot be disproved safely, so preserve its resources.
+        return True
     try:
-        return process_birth(pid) == owner.get("process_birth")
+        return process_birth(pid) == recorded_birth
     except RuntimeError:
-        return False
+        return True
 
 
 class CommandError(RuntimeError):
@@ -603,12 +618,16 @@ def cleanup_ledger_resource(
             except ProcessLookupError:
                 result.update(result="already_absent", attempts=1)
                 return result
+            recorded_birth = item.get("process_birth")
+            if not is_current_process_birth(recorded_birth):
+                result.update(result="preserved_legacy_identity", attempts=1)
+                return result
             try:
                 current_birth = process_birth(pid)
             except RuntimeError:
-                result.update(result="already_absent", attempts=1)
+                result.update(result="preserved_identity_unavailable", attempts=1)
                 return result
-            if current_birth != item.get("process_birth"):
+            if current_birth != recorded_birth:
                 result.update(result="preserved_identity_mismatch", attempts=1)
                 return result
             os.killpg(pid, signal.SIGTERM)

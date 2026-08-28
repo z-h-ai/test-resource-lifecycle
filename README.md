@@ -12,4 +12,6 @@ trl sweeper install
 
 Resources are removable only when the global ledger and the complete policy-v1 label/marker identity agree. Missing proof, a live owner, a foreign host or Docker context, and pre-existing unlabeled resources are preserved. The implementation never invokes a global Docker prune or guesses ownership from names or age.
 
+Process identities use a versioned, locale- and timezone-stable birth token. Ledgers written by older releases are treated as unverifiable while their owner PID is live and are preserved fail-closed.
+
 See [`docs/configuration.md`](docs/configuration.md) for the configuration contract and bootstrap lock format.

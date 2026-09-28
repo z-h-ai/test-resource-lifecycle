@@ -93,6 +93,26 @@ class Sessions(unittest.TestCase):
                 self.assertEqual(close_session(opened['context'], owner, state_root=state)[0], 0)
                 self.assertEqual(run.call_count, 1)
 
+    def test_hostless_sql_uri_and_inherited_libpq_environment_survive_recovery(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); state = root / 'state'
+            (root / 'cleanup.sql').write_text('SELECT 1;')
+            owner = dict(pid=os.getpid(), process_birth=process_birth(os.getpid()), host_id=stable_host_id(state))
+            config = {'policy_version': 1, 'repository_id': 'session-hostless', 'profiles': {'e2e': {'resources': {
+                'sql_file': [{'name': 'cleanup', 'file': 'cleanup.sql', 'database_url_env': 'SESSION_TEST_DB'}]}}}}
+            uri = 'postgresql:///test?host=%2Ftmp&options=-c%20search_path%3Dfixture'
+            with patch.dict(os.environ, {'SESSION_TEST_DB': uri, 'PGPASSWORD': 'private-value', 'PGSSLMODE': 'verify-full'}):
+                opened = open_session(config, 'e2e', root, 'hostless', owner,
+                    (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(), state)
+            def fake(argv, **kwargs):
+                self.assertEqual(argv[2], uri)
+                self.assertEqual(kwargs['env']['PGPASSWORD'], 'private-value')
+                self.assertEqual(kwargs['env']['PGSSLMODE'], 'verify-full')
+                return subprocess.CompletedProcess(argv, 0, '', '')
+            with patch('trl.session.command', side_effect=fake):
+                self.assertEqual(close_session(opened['context'], owner, state_root=state)[0], 0)
+
     def test_failed_prepare_preserves_recovery_configuration(self):
         from trl.core import Lifecycle
         with tempfile.TemporaryDirectory() as raw:

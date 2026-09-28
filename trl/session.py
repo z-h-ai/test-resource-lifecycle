@@ -71,6 +71,8 @@ def persist_private(lifecycle):
     for item in resources.get('postgresql', []):
         names.update([item['password_env'], item['inject_url_env']])
     names.update(x['database_url_env'] for x in resources.get('sql_file', []))
+    if resources.get('sql_file'):
+        names.update(k for k in lifecycle.environment if k.startswith('PG'))
     for item in resources.get('http', []):
         names.add(item.get('body_env'))
         names.update(v[1:] for v in item.get('headers', {}).values() if isinstance(v, str) and v.startswith('$'))

@@ -605,7 +605,7 @@ class Lifecycle:
                     if not database_url:
                         raise ValueError("SQL cleanup database URL is unavailable")
                     self.secrets.append(database_url)
-                    from urllib.parse import urlsplit, urlunsplit, unquote
+                    from urllib.parse import urlsplit, unquote
                     db = urlsplit(database_url)
                     if db.scheme not in {'postgresql', 'postgres'}:
                         raise ValueError('invalid SQL cleanup connection')
@@ -615,8 +615,10 @@ class Lifecycle:
                     authority = db.netloc
                     if '@' in authority:
                         authority = authority.rsplit('@', 1)[0].split(':', 1)[0] + '@' + authority.rsplit('@', 1)[1]
-                    connection = urlunsplit((db.scheme, authority, db.path,
-                        '&'.join(v for v in query if unquote(v.split('=', 1)[0]) != 'password'), db.fragment))
+                    clean_query = '&'.join(v for v in query if unquote(v.split('=', 1)[0]) != 'password')
+                    connection = db.scheme + '://' + authority + db.path
+                    if clean_query: connection += '?' + clean_query
+                    if db.fragment: connection += '#' + db.fragment
                     self.runner(["psql", "--dbname", connection, "--set", "ON_ERROR_STOP=1", "--file", str(sql_path)],
                                 cwd=self.workdir, env={**self.environment, 'PGPASSWORD': password}, timeout=30)
                 result["result"] = "passed"

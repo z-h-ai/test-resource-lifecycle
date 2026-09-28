@@ -2,7 +2,7 @@
 
 Source: feat/acceptance-sessions, based on 71bb03e. Uses the same policy-v1 ownership ledger and adapters.
 
-`TRL_DOCKER_INTEGRATION=1 python3 -m unittest discover -s tests -v`: 38 tests passed, zero skipped.
+`TRL_DOCKER_INTEGRATION=1 python3 -m unittest discover -s tests -v`: 39 tests passed, zero skipped.
 This includes real concurrent PostgreSQL instances, distinct URLs/ports and independent actor tables; closing one
 leaves the peer queryable. Real CLI service creation returns without waiting for service stdout EOF.
 A killed owner is reclaimed by the existing sweeper. Service code cannot execute before durable ownership.

@@ -10,11 +10,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-VERSION = "1.0.5"
+VERSION = "1.1.0"
 DIST.mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory() as raw:
     source = Path(raw)
-    shutil.copytree(ROOT / "trl", source / "trl")
+    shutil.copytree(ROOT / "trl", source / "trl", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     # zipapp's `main=` argument generates a stub that discards the callable's
     # return value (no SystemExit), so `python app.pyz` always exits 0 even
     # when the CLI returned failure. Provide an explicit entry point that

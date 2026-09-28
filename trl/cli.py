@@ -200,6 +200,31 @@ def sweeper_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def session_command(args):
+    from .session import open_session, status_session, close_session
+    if args.action == "status":
+        _print(status_session(args.context))
+        return 0
+    if args.action == 'close' and args.recover:
+        owner = read_json(Path(args.context))['owner']
+        code, report = close_session(args.context, owner, recovery=True)
+        _print(report)
+        return code
+    owner = (read_json(Path(args.owner_file)) if args.owner_file else {
+        'pid': args.owner_pid, 'host_id': stable_host_id(), 'process_birth': process_birth(args.owner_pid)})
+    # CLI is a short-lived child; the explicit owner must be its live parent.
+    if owner.get("pid") != os.getppid():
+        raise ValueError("session owner must be the calling supervisor, not this CLI or an unrelated PID")
+    if args.action == "open":
+        _print(open_session(read_json(Path(args.config)), args.profile,
+                            args.workdir or str(Path(args.config).resolve().parent),
+                            args.attempt, owner, args.deadline_at, response_path=args.response_file))
+        return 0
+    code, report = close_session(args.context, owner, args.exit_code)
+    _print(report)
+    return code
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="trl")
     root.add_argument("--version", action="version", version=__version__)
@@ -212,6 +237,27 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--run-id")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(handler=run_command)
+    session = sub.add_parser("session")
+    actions = session.add_subparsers(dest="action", required=True)
+    for action in ("open", "status", "close"):
+        entry = actions.add_parser(action)
+        entry.set_defaults(handler=session_command)
+        if action != "open":
+            entry.add_argument("--context", required=True)
+        if action != "status":
+            identity = entry.add_mutually_exclusive_group(required=True)
+            if action == "close": identity.add_argument("--recover", action="store_true")
+            identity.add_argument("--owner-file")
+            identity.add_argument("--owner-pid", type=int)
+        if action == "open":
+            entry.add_argument("--config", default=".test-resource-lifecycle.json")
+            entry.add_argument("--profile", required=True)
+            entry.add_argument("--workdir")
+            entry.add_argument("--attempt", required=True)
+            entry.add_argument("--deadline-at", required=True)
+            entry.add_argument("--response-file")
+        if action == "close":
+            entry.add_argument("--exit-code", type=int, default=0)
     audit = sub.add_parser("audit")
     audit.add_argument("--repo")
     audit.add_argument("--json", action="store_true")

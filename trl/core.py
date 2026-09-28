@@ -10,6 +10,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -364,6 +365,9 @@ class Lifecycle:
         return bool(resources.get("postgresql") or resources.get("docker_compose"))
 
     def persist(self) -> None:
+        if self.context.get('lifecycle_mode') == 'session':
+            from .session import persist_private
+            persist_private(self)
         self.ledger["updated_at"] = utc_now()
         self.paths.write("run-context.json", self.context)
         self.paths.write("resource-ledger.json", self.ledger)
@@ -382,7 +386,7 @@ class Lifecycle:
         )
 
     def prepare(self) -> None:
-        self.paths.global_dir.mkdir(parents=True, exist_ok=False)
+        self.paths.global_dir.mkdir(parents=True, exist_ok=self.context.get('lifecycle_mode') == 'session')
         self.persist()
         if self.docker_error:
             raise RuntimeError(f"Docker is required by profile but unavailable: {self.docker_error}")
@@ -428,7 +432,7 @@ class Lifecycle:
             password = secrets.token_urlsafe(24)
         self.secrets.append(password)
         self.environment[entry["password_env"]] = password
-        safe_name = re.sub(r"[^a-z0-9_.-]", "-", f"trl-{self.config['repository_id']}-{self.run_id}-{entry['name']}").lower()[:63]
+        safe_name = re.sub(r"[^a-z0-9_.-]", "-", f"trl-{self.nonce[:16]}-{self.config['repository_id']}-{entry['name']}").lower()[:63]
         volume_name = f"{safe_name}-data"[:63]
         volume_id = self.runner(
             ["docker", "volume", "create", *self._docker_label_args(), volume_name],
@@ -439,10 +443,10 @@ class Lifecycle:
         args += self._docker_label_args()
         args += [
             "-v", f"{volume_id}:/var/lib/postgresql/data",
-            "-e", f"POSTGRES_USER={entry['username']}", "-e", f"POSTGRES_PASSWORD={password}",
+            "-e", f"POSTGRES_USER={entry['username']}", "-e", "POSTGRES_PASSWORD",
             "-e", f"POSTGRES_DB={entry['database']}", entry.get("image", "postgres:16-alpine"),
         ]
-        container_id = self.runner(args, cwd=self.workdir, timeout=60).stdout.strip()
+        container_id = self.runner(args, cwd=self.workdir, env={**self.environment, "POSTGRES_PASSWORD": password}, timeout=60).stdout.strip()
         self.add_resource("container", container_id, entry["name"], {"adapter": "postgresql"})
         port = self.runner(
             ["docker", "port", container_id, "5432/tcp"], cwd=self.workdir, timeout=10,
@@ -450,7 +454,7 @@ class Lifecycle:
         deadline = time.monotonic() + 60
         while True:
             ready = self.runner(
-                ["docker", "exec", container_id, "pg_isready", "-U", entry["username"], "-d", entry["database"]],
+                ["docker", "exec", container_id, "pg_isready", "-h", "127.0.0.1", "-U", entry["username"], "-d", entry["database"]],
                 cwd=self.workdir, timeout=10, check=False,
             )
             if ready.returncode == 0:
@@ -465,7 +469,7 @@ class Lifecycle:
         compose_file = (self.workdir / entry["file"]).resolve()
         if not compose_file.is_file() or self.workdir not in compose_file.parents:
             raise ValueError("compose file is missing or outside repository")
-        project = re.sub(r"[^a-z0-9_-]", "-", f"trl-{self.config['repository_id']}-{self.run_id}-{entry['name']}").lower()[:63]
+        project = re.sub(r"[^a-z0-9_-]", "-", f"trl-{self.nonce[:16]}-{self.config['repository_id']}-{entry['name']}").lower()[:63]
         env = self.environment.copy()
         env.update(entry.get("environment", {}))
         env["TRL_LABEL_MANAGED"] = "true"
@@ -499,8 +503,38 @@ class Lifecycle:
     def _prepare_service(self, entry: dict[str, Any]) -> None:
         env = self.environment.copy()
         env.update(entry.get("environment", {}))
-        process = subprocess.Popen(entry["argv"], cwd=self.workdir, env=env, start_new_session=True)
-        self.add_resource("process", str(process.pid), entry["name"], {"process_birth": process_birth(process.pid)})
+        # Service output cannot inherit the short-lived session CLI's JSON pipe.
+        log_path = self.paths.global_dir / (entry['name'] + '.service.log')
+        fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        read_fd, write_fd = os.pipe()
+        ack_read, ack_write = os.pipe()
+        # EOF on launcher crash prevents unclaimed application code from running.
+        gate = ("import os,sys\nfd=int(sys.argv[1]); ack=int(sys.argv[2])\n"
+                "os.set_inheritable(ack,False)\nready=os.read(fd,1); os.close(fd)\n"
+                "if ready != b'1': sys.exit(70)\n"
+                "try: os.execvpe(sys.argv[3],sys.argv[3:],os.environ)\n"
+                "except OSError: os.write(ack,b'failed'); sys.exit(70)\n")
+        process = None
+        try:
+            with os.fdopen(fd, 'wb') as log:
+                process = subprocess.Popen([sys.executable, '-c', gate, str(read_fd), str(ack_write), *entry['argv']],
+                    cwd=self.workdir, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                    start_new_session=True, pass_fds=(read_fd, ack_write))
+            os.close(read_fd); read_fd = None
+            os.close(ack_write); ack_write = None
+            self.add_resource("process", str(process.pid), entry["name"], {"process_birth": process_birth(process.pid)})
+            os.write(write_fd, b'1')
+            if os.read(ack_read, 16):
+                raise OSError('service executable could not start')
+        except BaseException:
+            if process is not None:
+                process.kill(); process.wait()
+            raise
+        finally:
+            if read_fd is not None: os.close(read_fd)
+            os.close(write_fd)
+            os.close(ack_read)
+            if ack_write is not None: os.close(ack_write)
         if entry.get("ready_url"):
             deadline = time.monotonic() + int(entry.get("ready_timeout_seconds", 30))
             while True:
@@ -540,7 +574,7 @@ class Lifecycle:
                         "errors": [redact(e, self.secrets) for e in errors], "residual": residual},
             "finished_at": utc_now(),
         }
-        self.paths.write("resource-ledger.json", self.ledger)
+        self.persist()
         self.paths.write("cleanup-report.json", report)
         if status == "failed":
             return EXIT_INFRASTRUCTURE, report
@@ -556,8 +590,8 @@ class Lifecycle:
                 if time.monotonic() >= deadline:
                     raise TimeoutError("cleanup deadline exceeded")
                 if kind == "http":
-                    headers = {k: os.environ.get(v[1:], "") if isinstance(v, str) and v.startswith("$") else v for k, v in entry.get("headers", {}).items()}
-                    body = os.environ.get(entry.get("body_env", ""), "").encode() or None
+                    headers = {k: self.environment.get(v[1:], "") if isinstance(v, str) and v.startswith("$") else v for k, v in entry.get("headers", {}).items()}
+                    body = self.environment.get(entry.get("body_env", ""), "").encode() or None
                     request = Request(entry["url"], data=body, headers=headers, method=entry.get("method", "DELETE"))
                     with urlopen(request, timeout=min(15, max(1, deadline - time.monotonic()))) as response:
                         expected = entry.get("expected_status", [200, 204])
@@ -571,7 +605,19 @@ class Lifecycle:
                     if not database_url:
                         raise ValueError("SQL cleanup database URL is unavailable")
                     self.secrets.append(database_url)
-                    self.runner(["psql", database_url, "--set", "ON_ERROR_STOP=1", "--file", str(sql_path)], cwd=self.workdir, timeout=30)
+                    from urllib.parse import urlsplit, urlunsplit, unquote, parse_qsl, urlencode
+                    db = urlsplit(database_url)
+                    if db.scheme not in {'postgresql', 'postgres'} or not db.hostname:
+                        raise ValueError('invalid SQL cleanup connection')
+                    query = parse_qsl(db.query, keep_blank_values=True)
+                    password = next((v for k, v in query if k == 'password'), unquote(db.password or ''))
+                    authority = db.netloc
+                    if '@' in authority:
+                        authority = authority.split('@', 1)[0].split(':', 1)[0] + '@' + authority.split('@', 1)[1]
+                    connection = urlunsplit((db.scheme, authority, db.path,
+                        urlencode([(k, v) for k, v in query if k != 'password']), db.fragment))
+                    self.runner(["psql", "--dbname", connection, "--set", "ON_ERROR_STOP=1", "--file", str(sql_path)],
+                                cwd=self.workdir, env={**self.environment, 'PGPASSWORD': password}, timeout=30)
                 result["result"] = "passed"
                 actions.append(result)
                 return
@@ -717,6 +763,11 @@ def sweep_ledgers(
         if owner_alive(context.get("owner", {}), host_id):
             outcomes.append({"ledger": str(ledger_path), "result": "preserved_active_owner"})
             continue
+        if context.get('lifecycle_mode') == 'session':
+            owner = context.get('owner', {})
+            if not is_current_process_birth(owner.get('process_birth')) or not isinstance(owner.get('pid'), int):
+                outcomes.append({'ledger': str(ledger_path), 'result': 'preserved_unknown_owner'})
+                continue
         candidate = ledger_path.parent / "sweep-candidate.json"
         if not immediate:
             if not candidate.exists():
@@ -727,6 +778,22 @@ def sweep_ledgers(
             if time.time() - float(first) < 60:
                 outcomes.append({"ledger": str(ledger_path), "result": "candidate_waiting"})
                 continue
+        if context.get('lifecycle_mode') == 'session':
+            if context.get('session_status') == 'closed':
+                outcomes.append({'ledger': str(ledger_path), 'result': 'already_closed'})
+                continue
+            if not (ledger_path.parent / 'session-private.json').exists():
+                outcomes.append({'ledger': str(ledger_path), 'result': 'preserved_missing_session_private'})
+                continue
+            from .session import close_session
+            try:
+                code, report = close_session(ledger_path.parent / 'run-context.json', context['owner'],
+                    state_root=state_root, recovery=True)
+                outcomes.append({'ledger': str(ledger_path), 'result': 'swept' if code == 0 else 'cleanup_failed',
+                                 'actions': report['cleanup']['actions']})
+            except (ValueError, OSError) as exc:
+                outcomes.append({'ledger': str(ledger_path), 'result': 'preserved_session', 'error': redact(exc)})
+            continue
         deadline = time.monotonic() + 120
         actions = []
         for item in reversed(ledger.get("resources", [])):

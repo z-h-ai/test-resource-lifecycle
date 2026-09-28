@@ -81,11 +81,12 @@ class Sessions(unittest.TestCase):
             owner = dict(pid=os.getpid(), process_birth=process_birth(os.getpid()), host_id=stable_host_id(state))
             config = {'policy_version': 1, 'repository_id': 'session-sql', 'profiles': {'e2e': {'resources': {
                 'sql_file': [{'name': 'cleanup', 'file': 'cleanup.sql', 'database_url_env': 'SESSION_TEST_DB'}]}}}}
-            with patch.dict(os.environ, {'SESSION_TEST_DB': 'postgresql://tester:private-value@127.0.0.1:5432/test'}):
+            with patch.dict(os.environ, {'SESSION_TEST_DB': 'postgresql://tester:private-value@127.0.0.1:5432/test?options=-c%20search_path%3Dfixture'}):
                 opened = open_session(config, 'e2e', root, 'sql', owner,
                     (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(), state)
             def fake(argv, **kwargs):
                 self.assertNotIn('private-value', str(argv))
+                self.assertIn('options=-c%20search_path%3Dfixture', argv[2])
                 self.assertEqual(kwargs['env']['PGPASSWORD'], 'private-value')
                 return subprocess.CompletedProcess(argv, 0, '', '')
             with patch('trl.session.command', side_effect=fake) as run:

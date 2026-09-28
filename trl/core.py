@@ -605,17 +605,18 @@ class Lifecycle:
                     if not database_url:
                         raise ValueError("SQL cleanup database URL is unavailable")
                     self.secrets.append(database_url)
-                    from urllib.parse import urlsplit, urlunsplit, unquote, parse_qsl, urlencode
+                    from urllib.parse import urlsplit, urlunsplit, unquote
                     db = urlsplit(database_url)
-                    if db.scheme not in {'postgresql', 'postgres'} or not db.hostname:
+                    if db.scheme not in {'postgresql', 'postgres'}:
                         raise ValueError('invalid SQL cleanup connection')
-                    query = parse_qsl(db.query, keep_blank_values=True)
-                    password = next((v for k, v in query if k == 'password'), unquote(db.password or ''))
+                    query = db.query.split('&')
+                    password = next((unquote(v.split('=', 1)[1]) for v in query if '=' in v and unquote(v.split('=', 1)[0]) == 'password'),
+                                    unquote(db.password) if db.password is not None else self.environment.get('PGPASSWORD', ''))
                     authority = db.netloc
                     if '@' in authority:
-                        authority = authority.split('@', 1)[0].split(':', 1)[0] + '@' + authority.split('@', 1)[1]
+                        authority = authority.rsplit('@', 1)[0].split(':', 1)[0] + '@' + authority.rsplit('@', 1)[1]
                     connection = urlunsplit((db.scheme, authority, db.path,
-                        urlencode([(k, v) for k, v in query if k != 'password']), db.fragment))
+                        '&'.join(v for v in query if unquote(v.split('=', 1)[0]) != 'password'), db.fragment))
                     self.runner(["psql", "--dbname", connection, "--set", "ON_ERROR_STOP=1", "--file", str(sql_path)],
                                 cwd=self.workdir, env={**self.environment, 'PGPASSWORD': password}, timeout=30)
                 result["result"] = "passed"
